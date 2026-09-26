@@ -15,11 +15,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout deploy-kit link checker
+        uses: actions/checkout@v4
+        with:
+          repository: aditya0si/deploy-kit
+          # job.workflow_sha is this reusable workflow's own revision; github.workflow_sha
+          # tracks the caller, so it would execute helper code at an untrusted revision.
+          ref: ${{ job.workflow_sha }}
+          path: .deploy-kit-tools
       - name: Entry point exists
         working-directory: ${{ inputs.working-directory }}
+        env:
+          ENTRY: ${{ inputs.entry }}
+          TOOLS: ${{ github.workspace }}/.deploy-kit-tools
         run: |
-          test -f "${{ inputs.entry }}" || (echo "::error::missing ${{ inputs.entry }}"; exit 1)
-          echo "entry size: $(wc -c < "${{ inputs.entry }}") bytes"
+          python3 "$TOOLS/scripts/validate_inputs.py" path "$ENTRY"
+          test -f "$ENTRY" || (echo "::error::missing $ENTRY"; exit 1)
+          echo "entry size: $(wc -c < "$ENTRY") bytes"
       - name: No tracked junk
         working-directory: ${{ inputs.working-directory }}
         run: |
@@ -27,4 +39,4 @@ jobs:
           if [ -n "$bad" ]; then echo "::error::tracked junk:"; echo "$bad"; exit 1; fi
       - name: Internal links resolve
         working-directory: ${{ inputs.working-directory }}
-        run: python3 scripts/check_links.py
+        run: python3 "${{ github.workspace }}/.deploy-kit-tools/scripts/check_links.py" .

@@ -8,7 +8,7 @@ on:
       command:
         type: string
         default: deploy
-        description: wrangler subcommand, e.g. "deploy"
+        description: 'one of: deploy (Workers), pages-deploy (Cloudflare Pages)'
     secrets:
       CLOUDFLARE_API_TOKEN:
         required: true
@@ -16,17 +16,38 @@ on:
         required: true
 permissions:
   contents: read
+concurrency:
+  group: deploy-cloudflare-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout deploy-kit input validator
+        uses: actions/checkout@v4
+        with:
+          repository: aditya0si/deploy-kit
+          # job.workflow_sha is this reusable workflow's own revision; github.workflow_sha
+          # tracks the caller, so it would execute helper code at an untrusted revision.
+          ref: ${{ job.workflow_sha }}
+          path: .deploy-kit-tools
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Validate command
+        env:
+          DEPLOY_COMMAND: ${{ inputs.command }}
+        run: python3 "${{ github.workspace }}/.deploy-kit-tools/scripts/validate_inputs.py" wrangler-command "$DEPLOY_COMMAND"
       - name: Deploy
         working-directory: ${{ inputs.working-directory }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx --yes wrangler@latest ${{ inputs.command }}
+          DEPLOY_COMMAND: ${{ inputs.command }}
+        run: |
+          case "$DEPLOY_COMMAND" in
+            deploy) npx --yes wrangler@4.141.0 deploy ;;
+            pages-deploy) npx --yes wrangler@4.141.0 pages deploy ;;
+            *) echo "::error::unsupported command"; exit 1 ;;
+          esac

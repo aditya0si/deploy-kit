@@ -21,26 +21,43 @@ on:
         required: true
 permissions:
   contents: read
+concurrency:
+  group: deploy-netlify-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout deploy-kit input validator
+        uses: actions/checkout@v4
+        with:
+          repository: aditya0si/deploy-kit
+          # job.workflow_sha is this reusable workflow's own revision; github.workflow_sha
+          # tracks the caller, so it would execute helper code at an untrusted revision.
+          ref: ${{ job.workflow_sha }}
+          path: .deploy-kit-tools
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
       - name: Build
         if: ${{ inputs.build-command != '' }}
         run: ${{ inputs.build-command }}
+      - name: Validate publish directory
+        env:
+          PUBLISH_DIR: ${{ inputs.publish-dir }}
+        run: python3 "${{ github.workspace }}/.deploy-kit-tools/scripts/validate_inputs.py" path "$PUBLISH_DIR"
       - name: Deploy
         id: deploy
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+          PUBLISH_DIR: ${{ inputs.publish-dir }}
+          PROD: ${{ inputs.prod }}
         run: |
           FLAGS=""
-          if [ "${{ inputs.prod }}" = "true" ]; then FLAGS="--prod"; fi
-          npx --yes netlify-cli@latest deploy $FLAGS --dir="${{ inputs.publish-dir }}" --json > out.json
+          if [ "$PROD" = "true" ]; then FLAGS="--prod"; fi
+          npx --yes netlify-cli@27.10.0 deploy $FLAGS --dir="$PUBLISH_DIR" --json > out.json
           URL=$(python3 -c 'import json;print(json.load(open("out.json")).get("url",""))')
           echo "url=$URL" >> "$GITHUB_OUTPUT"
           echo "::notice::deployed $URL"

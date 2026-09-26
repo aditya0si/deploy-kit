@@ -14,6 +14,9 @@ on:
 permissions:
   contents: read
   packages: write
+concurrency:
+  group: docker-ghcr-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   docker:
     runs-on: ubuntu-latest

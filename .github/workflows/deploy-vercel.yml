@@ -21,6 +21,9 @@ on:
         required: true
 permissions:
   contents: read
+concurrency:
+  group: deploy-vercel-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -39,9 +42,9 @@ jobs:
         run: |
           FLAGS=""
           if [ "${{ inputs.prod }}" = "true" ]; then FLAGS="--prod"; fi
-          npx --yes vercel@latest pull --yes $FLAGS --token="$VERCEL_TOKEN" >/dev/null
-          npx --yes vercel@latest build $FLAGS --token="$VERCEL_TOKEN" >/dev/null
-          URL=$(npx --yes vercel@latest deploy --prebuilt $FLAGS --token="$VERCEL_TOKEN" | tail -1)
+          npx --yes vercel@54.7.1 pull --yes $FLAGS --token="$VERCEL_TOKEN" >/dev/null
+          npx --yes vercel@54.7.1 build $FLAGS --token="$VERCEL_TOKEN" >/dev/null
+          URL=$(npx --yes vercel@54.7.1 deploy --prebuilt $FLAGS --token="$VERCEL_TOKEN" | tail -1)
           echo "url=$URL" >> "$GITHUB_OUTPUT"
           echo "::notice::deployed $URL"
       - name: Verify body content

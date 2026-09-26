@@ -35,6 +35,9 @@ RAW_BASE = "https://raw.githubusercontent.com/" + KIT_SLUG + "/" + KIT_BRANCH
 
 DRY = False          # set by `new --dry-run`: report the plan, touch nothing
 
+# NOTE: docker-ghcr.yml publishes a container image to GHCR; it is not a deploy of an
+# application. A Docker stack still needs a runtime host (e.g. deploy-cloudflare.yml or
+# Render) actually serving the image.
 # stack -> (ci workflow file, deploy workflow file or None)
 STACKS = {
     "node": ("ci-node.yml", "deploy-vercel.yml"),
@@ -372,6 +375,112 @@ def probe(url, marker=None, timeout=20.0, retries=3):
     return False, last
 
 
+# ----------------------------------------------------------------- health
+HEALTH_LIVE = "live"
+HEALTH_DEGRADED = "degraded"
+HEALTH_DOWN = "down"
+HEALTH_UNKNOWN = "unknown"
+
+
+def normalize_probes(site):
+    """Return a uniform list of probes for a site.
+
+    Backward compatible: a legacy `url`/`marker` pair is treated as one required
+    probe, so existing manifests keep working unchanged. An explicit `probes`
+    list wins whenever the key is PRESENT, even when empty, so `probes: []` never
+    silently falls back to a legacy `url`. Malformed declarations raise a clear
+    ValueError instead of crashing on iteration. Each probe is
+    {url, marker, label, required}; a probe with no url is "unknown", never
+    fabricated.
+
+    `required` must be an actual boolean when present and defaults to True when
+    absent. Strings and numbers are rejected rather than coerced, so `"false"` or
+    `0` can never silently flip a required probe to optional.
+    """
+    if "probes" in site:
+        raw = site["probes"]
+        if not isinstance(raw, list):
+            raise ValueError("site %r: 'probes' must be a list, not %s"
+                             % (site.get("name"), type(raw).__name__))
+        probes = []
+        for item in raw:
+            if not isinstance(item, dict):
+                raise ValueError("site %r: each probe must be an object, not %s"
+                                 % (site.get("name"), type(item).__name__))
+            url = item.get("url")
+            marker = item.get("marker")
+            label = item.get("label")
+            if url is not None and not isinstance(url, str):
+                raise ValueError("site %r: probe 'url' must be a string" % site.get("name"))
+            if marker is not None and not isinstance(marker, str):
+                raise ValueError("site %r: probe 'marker' must be a string" % site.get("name"))
+            if label is not None and not isinstance(label, str):
+                raise ValueError("site %r: probe 'label' must be a string" % site.get("name"))
+            if "required" in item:
+                required = item["required"]
+                if not isinstance(required, bool):
+                    raise ValueError("site %r: probe 'required' must be a boolean, not %s"
+                                     % (site.get("name"), type(required).__name__))
+            else:
+                required = True
+            probes.append({
+                "url": url,
+                "marker": marker,
+                "label": label or url or "probe",
+                "required": required,
+            })
+        return probes
+    if site.get("url"):
+        return [{"url": site["url"], "marker": site.get("marker"),
+                 "label": site.get("label") or "web", "required": True}]
+    return []
+
+
+def probe_result(one, prober=None):
+    """Run a single probe. `prober` is injectable so behaviour is testable offline."""
+    prober = prober or probe
+    url = one.get("url")
+    label = one.get("label") or url or "probe"
+    required = one.get("required") is True
+    if not url:
+        return {"label": label, "url": None, "required": required,
+                "state": "unknown", "detail": "no url declared"}
+    ok, detail = prober(url, one.get("marker"), retries=1, timeout=15)
+    return {"label": label, "url": url, "required": required,
+            "state": "pass" if ok else "fail", "detail": detail}
+
+
+def evaluate_site(site, prober=None):
+    """Combine every probe into one honest verdict.
+
+    live     - at least one required probe, and every required and optional probe passed
+    degraded - required probes all passed but an optional probe failed/is unknown, OR
+               the site declares only optional probes and any of them is not unknown
+    down     - a required probe failed
+    unknown  - the site declares no probes, declares no required probe, or a required
+               probe is unknown (no url)
+    """
+    probes = normalize_probes(site)
+    results = [probe_result(p, prober=prober) for p in probes]
+    required = [r for r in results if r["required"]]
+    optional = [r for r in results if not r["required"]]
+    if not probes:
+        verdict = HEALTH_UNKNOWN
+    elif any(r["state"] == "fail" for r in required):
+        verdict = HEALTH_DOWN
+    elif any(r["state"] == "unknown" for r in required):
+        verdict = HEALTH_UNKNOWN
+    elif not required:
+        # A site with only optional probes can never read as fully live.
+        verdict = (HEALTH_UNKNOWN if all(r["state"] == "unknown" for r in optional)
+                   else HEALTH_DEGRADED)
+    elif any(r["state"] != "pass" for r in optional):
+        verdict = HEALTH_DEGRADED
+    else:
+        verdict = HEALTH_LIVE
+    return {"name": site.get("name"), "health": verdict, "probes": results}
+
+
 # ----------------------------------------------------------------- commands
 def cmd_new(args):
     path = os.path.abspath(args.path or os.getcwd())
@@ -525,6 +634,95 @@ def default_branch_of(repo):
         return "main"
 
 
+def site_workflows(site):
+    """Declared CI workflow(s) for a site. Empty means 'not declared' -> unknown.
+
+    Accepts a string or a list of strings. Anything else raises a clear ValueError
+    rather than failing with an opaque iteration error.
+    """
+    wf = site.get("workflows", site.get("workflow"))
+    if wf is None:
+        return []
+    if isinstance(wf, str):
+        wf = [wf]
+    if not isinstance(wf, list):
+        raise ValueError("site %r: 'workflows' must be a string or a list, not %s"
+                         % (site.get("name"), type(wf).__name__))
+    out = []
+    for w in wf:
+        if not isinstance(w, str):
+            raise ValueError("site %r: each 'workflows' entry must be a string, not %s"
+                             % (site.get("name"), type(w).__name__))
+        if w:
+            out.append(w)
+    return out
+
+
+def legacy_live(health, probes):
+    """Backward-compatible `live` string for `status --json`.
+
+    The pre-probe contract returned "-" with no url, otherwise "LIVE <detail>" or
+    "DOWN <detail>" for the single probe. Preserve that string shape for legacy
+    consumers while the richer `health`/`probes` fields carry the new verdict.
+    """
+    if not probes:
+        return "-"
+    primary = next((p for p in probes if p.get("required")), probes[0])
+    prefix = {"live": "LIVE", "down": "DOWN", "degraded": "DEGRADED",
+              "unknown": "UNKNOWN"}.get(health, "UNKNOWN")
+    detail = primary.get("detail") or ""
+    return (prefix + " " + detail).strip()
+
+
+def workflow_run_state(repo, workflow, branch):
+    """Latest run state for one named workflow on one branch. Never borrows another
+    workflow's run, and never treats 'no run observed' as green."""
+    runs = gh_json(["run", "list", "--repo", repo, "--workflow", workflow,
+                    "--branch", branch, "--limit", "1",
+                    "--json", "conclusion,status,url"], check=False) or []
+    if not runs:
+        return {"workflow": workflow, "state": "no-run",
+                "detail": "no run observed", "url": None}
+    row = runs[0]
+    raw = row.get("conclusion") or row.get("status") or "unknown"
+    if raw == "success":
+        state = "success"
+    elif raw in ("queued", "in_progress", "waiting", "requested", "pending"):
+        state = "pending"
+    elif raw in ("failure", "cancelled", "timed_out", "startup_failure",
+                 "action_required", "stale"):
+        state = "failed"
+    else:
+        state = "unknown"
+    return {"workflow": workflow, "state": state, "detail": str(raw), "url": row.get("url")}
+
+
+def aggregate_ci(states):
+    """Conservative aggregation across workflows: one failure fails the site, one
+    missing/unknown run keeps it unknown, and only all-success is green."""
+    if not states:
+        return "unknown"
+    values = [s["state"] for s in states]
+    if any(v == "failed" for v in values):
+        return "failed"
+    if any(v in ("no-run", "unknown") for v in values):
+        return "unknown"
+    if any(v == "pending" for v in values):
+        return "pending"
+    if all(v == "success" for v in values):
+        return "success"
+    return "unknown"
+
+
+def ci_summary(repo, branch, workflows):
+    """(verdict, per-workflow states) for the declared workflows only."""
+    if not workflows:
+        return "unknown", [{"workflow": None, "state": "unknown",
+                            "detail": "no workflow declared", "url": None}]
+    states = [workflow_run_state(repo, wf, branch) for wf in workflows]
+    return aggregate_ci(states), states
+
+
 def cmd_status(args):
     sites = load_sites().get("sites", [])
     if not sites and not args.json:
@@ -532,30 +730,30 @@ def cmd_status(args):
     rows = []
     for site in sites:
         repo = site.get("repo")
-        ci = "-"
-        if repo:
-            branch = default_branch_of(repo)
-            runs = gh_json(["run", "list", "--repo", repo, "--limit", "1", "--branch", branch,
-                            "--json", "conclusion,status,url"], check=False) or []
-            if runs:
-                r = runs[0]
-                ci = (r.get("conclusion") or r.get("status") or "?")
-                if ci == "failure":
-                    ci = "FAILED"
-        live = "-"
-        if site.get("url"):
-            ok, detail = probe(site["url"], site.get("marker"), retries=1, timeout=15)
-            live = ("LIVE " + detail) if ok else ("DOWN " + detail)
+        workflows = site_workflows(site)
+        if repo and workflows:
+            ci, _states = ci_summary(repo, default_branch_of(repo), workflows)
+        elif repo:
+            ci = "unknown"
+        else:
+            ci = "-"
+        health = evaluate_site(site)
+        probes = health["probes"]
+        url = site.get("url") or next((p["url"] for p in probes if p.get("url")), None)
         rows.append({"name": site.get("name"), "repo": repo, "ci": ci,
-                     "url": site.get("url"), "live": live})
+                     "url": url, "live": legacy_live(health["health"], probes),
+                     "workflows": workflows, "health": health["health"],
+                     "probes": probes})
     if args.json:
         print(json.dumps(rows, indent=2))
         return 0
     width = max([len(r["name"] or "") for r in rows] + [4])
-    print("%-*s  %-9s  %s" % (width, "site", "ci", "live"))
-    print("-" * (width + 40))
+    print("%-*s  %-9s  %-9s  %s" % (width, "site", "ci", "live", "detail"))
+    print("-" * (width + 48))
     for r in rows:
-        print("%-*s  %-9s  %s" % (width, r["name"], r["ci"], r["live"]))
+        ci_txt = "FAILED" if r["ci"] == "failed" else r["ci"]
+        detail = "; ".join("%s=%s" % (p["label"], p["state"]) for p in r["probes"]) or "no probes"
+        print("%-*s  %-9s  %-9s  %s" % (width, r["name"], ci_txt, r["health"], detail))
     return 0
 
 
@@ -598,21 +796,34 @@ def cmd_site(args):
     for site in sites:
         name = site.get("name", "")
         repo = site.get("repo") or ""
-        url = site.get("url") or ""
-        ok, detail = (None, "no url")
-        if url:
-            ok, detail = probe(url, site.get("marker"), timeout=8.0, retries=1)
-        ci = ""
-        if repo:
-            runs = gh_json(["run", "list", "--repo", repo, "--limit", "1", "--branch",
-                            default_branch_of(repo), "--json", "conclusion,status"], check=False) or []
-            if runs:
-                ci = runs[0].get("conclusion") or runs[0].get("status") or ""
-        rows.append({"name": name, "repo": repo, "url": url, "ci": ci, "ok": ok, "detail": detail})
-        print("  %-22s ci=%-8s live=%s" % (name, ci or "-", detail))
+        workflows = site_workflows(site)
+        if repo and workflows:
+            ci, _ = ci_summary(repo, default_branch_of(repo), workflows)
+        elif repo:
+            ci = "unknown"
+        else:
+            ci = "-"
+        health = evaluate_site(site)
+        rows.append({"name": name, "repo": repo, "url": site.get("url") or "",
+                     "ci": ci, "health": health["health"], "probes": health["probes"]})
+        print("  %-22s ci=%-8s live=%s" % (name, ci, health["health"]))
 
-    live = sum(1 for r in rows if r["ok"])
+    def count(state):
+        return sum(1 for r in rows if r["health"] == state)
+
     green = sum(1 for r in rows if r["ci"] == "success")
+    summary = ["%d of %d declared surfaces fully live" % (count("live"), len(rows))]
+    extras = []
+    if count("degraded"):
+        extras.append("%d partial/degraded" % count("degraded"))
+    if count("down"):
+        extras.append("%d down" % count("down"))
+    if count("unknown"):
+        extras.append("%d unknown" % count("unknown"))
+    if extras:
+        summary.append("; ".join(extras))
+    summary.append("%d with a green CI run" % green)
+    summary = ", ".join(summary)
     stamp = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
 
     def cell(r):
@@ -620,13 +831,25 @@ def cmd_site(args):
         label = name
         if r["repo"]:
             label = '<a href="https://github.com/%s">%s</a>' % (html.escape(r["repo"]), name)
-        if r["url"]:
-            live_txt = ('<a class="ok" href="%s">live</a>' % html.escape(r["url"])) if r["ok"] else                        '<span class="bad">%s</span>' % html.escape(r["detail"][:40])
+        health = r["health"]
+        css = {"live": "ok", "degraded": "warn", "down": "bad"}.get(health, "muted")
+        detail = "; ".join("%s=%s" % (p["label"], p["state"]) for p in r["probes"]) or "no probes"
+        probe_url = next((p["url"] for p in r["probes"] if p["url"]), "")
+        url = r["url"] or probe_url
+        if health == "live" and url:
+            live_txt = '<a class="ok" href="%s">live</a>' % html.escape(url)
         else:
-            live_txt = '<span class="muted">no url</span>'
-        ci_txt = ('<span class="ok">green</span>' if r["ci"] == "success"
-                  else ('<span class="bad">%s</span>' % html.escape(r["ci"]) if r["ci"]
-                        else '<span class="muted">-</span>'))
+            live_txt = '<span class="%s">%s</span>' % (css, html.escape(health))
+        live_txt += ' <span class="muted">%s</span>' % html.escape(detail[:60])
+        ci = r["ci"]
+        if ci == "success":
+            ci_txt = '<span class="ok">green</span>'
+        elif ci == "failed":
+            ci_txt = '<span class="bad">failed</span>'
+        elif ci in ("unknown", "pending", "no-run"):
+            ci_txt = '<span class="muted">%s</span>' % html.escape(ci)
+        else:
+            ci_txt = '<span class="muted">-</span>'
         return "<tr><td>%s</td><td>%s</td><td>%s</td></tr>" % (label, ci_txt, live_txt)
 
     body = "\n".join(cell(r) for r in rows)
@@ -644,22 +867,23 @@ table{width:100%;border-collapse:collapse}
 th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #1f242b}
 th{color:#8b949e;font-weight:600;font-size:.8rem;letter-spacing:.04em;text-transform:uppercase}
 a{color:#58a6ff;text-decoration:none} a:hover{text-decoration:underline}
-.ok{color:#3fb950}.bad{color:#f85149}.muted{color:#6e7681}
+.ok{color:#3fb950}.bad{color:#f85149}.warn{color:#d29922}.muted{color:#6e7681}
 footer{margin-top:28px;color:#6e7681;font-size:.85rem}
 </style></head><body><main>
 <h1>Live surfaces</h1>
-<p class="sub">__LIVE__ of __TOTAL__ declared surfaces serving, __GREEN__ with a green default-branch CI run.
+<p class="sub">__SUMMARY__.
 Snapshot generated __STAMP__ by <a href="https://github.com/__KIT__">deploy-kit</a>.</p>
 <table><thead><tr><th>project</th><th>ci</th><th>live</th></tr></thead>
 <tbody>
 __ROWS__
 </tbody></table>
 <footer>Generated from a manifest, not hand-maintained. A green CI run is a test verdict;
-"live" means the page returned 200 and contained the declared marker.</footer>
+"live" means every required probe returned 200 and contained its declared marker. A
+degraded/partial row has a required surface serving but an optional one missing or unknown.</footer>
 </main></body></html>
 """
-    for token, value in (("__LIVE__", live), ("__TOTAL__", len(rows)), ("__GREEN__", green),
-                         ("__STAMP__", stamp), ("__KIT__", KIT_SLUG), ("__ROWS__", body)):
+    for token, value in (("__SUMMARY__", summary), ("__STAMP__", stamp), ("__KIT__", KIT_SLUG),
+                         ("__ROWS__", body)):
         page = page.replace(token, str(value))
     assert "__" not in page.replace("__pycache__", ""), "unsubstituted placeholder in the page"
 
@@ -731,9 +955,29 @@ def cmd_selftest(args):
         except Exception as exc:                                   # noqa: BLE001
             problems.append("check_links.py does not compile: %s" % exc)
     try:
-        json.load(open(SITES, encoding="utf-8"))
+        data = json.load(open(SITES, encoding="utf-8"))
     except Exception as exc:                                       # noqa: BLE001
         problems.append("sites.json invalid: %s" % exc)
+        data = None
+    if isinstance(data, dict):
+        sites = data.get("sites")
+        if not isinstance(sites, list):
+            problems.append("sites.json: 'sites' must be a list")
+        else:
+            for site in sites:
+                if not isinstance(site, dict):
+                    problems.append("sites.json: each site must be an object")
+                    continue
+                try:
+                    normalize_probes(site)
+                except ValueError as exc:
+                    problems.append("sites.json: %s" % exc)
+                try:
+                    site_workflows(site)
+                except ValueError as exc:
+                    problems.append("sites.json: %s" % exc)
+    elif data is not None:
+        problems.append("sites.json: top level must be an object")
 
     print("workflows checked: %d" % checked)
     print("stacks: %s" % ",".join(sorted(STACKS)))

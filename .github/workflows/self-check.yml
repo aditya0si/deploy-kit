@@ -15,5 +15,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install pyyaml
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
       - name: Validate kit
         run: python bin/deployctl.py selftest

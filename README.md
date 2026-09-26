@@ -29,7 +29,11 @@ Callers reference `aditya0si/deploy-kit/.github/workflows/<file>@main`.
 | `package.json` | `ci-node.yml` | `deploy-vercel.yml` |
 | `pyproject.toml` / `requirements.txt` | `ci-python.yml` | `deploy-netlify.yml` or Render blueprint |
 | `index.html` only | `ci-static.yml` | `deploy-pages.yml` |
-| `Dockerfile` only | — | `docker-ghcr.yml`, `deploy-cloudflare.yml` |
+| `Dockerfile` only | — | `deploy-cloudflare.yml` (image build/push: `docker-ghcr.yml`) |
+
+`docker-ghcr.yml` builds and pushes a container image to GHCR; it does not deploy an
+application. A container still needs a runtime host that serves it (for example
+`deploy-cloudflare.yml` or Render). GHCR is a registry step, not a deployed URL.
 
 `ci-node.yml` runs install → lint → build → test, and a step whose script does not exist
 logs `::notice::` and passes instead of failing (a green run must mean "everything that
@@ -90,6 +94,17 @@ python $KIT/bin/deployctl.py selftest      # validate this kit (runs in CI too)
    --body` and prints key names plus lengths only.
 4. **Free-tier limits are stated, not implied.** Anything on Render says "cold start ~30 s";
    anything on Cloudflare says "10 ms CPU ceiling".
+5. **Deploy tooling is pinned.** Vercel CLI 54.7.1, Netlify CLI 27.10.0, Wrangler 4.141.0 —
+   never `@latest`. Overlapping deploys are serialised with `concurrency:`.
+6. **A surface is live only when every required probe passes.** Sites may declare
+   `probes: [{url, marker, label, required}]`; a probe with no `url` is reported
+   `unknown`, never invented, and a passing required probe with a failing/unknown optional
+   probe reads `degraded`, not `live`.
+7. **CI status is per declared workflow, and "no CI declared" is explicit.** `status` and
+   the status page report the latest conclusion of each workflow a site names in its
+   `workflows` list — never an unrelated workflow's run, and never a missing run as green.
+   A repo with `workflows: []` is intentionally no CI declared and is shown `unknown`, not
+   green. Every manifest row with a `repo` must declare `workflows` (possibly empty).
 
 ## Layout
 
@@ -97,7 +112,7 @@ python $KIT/bin/deployctl.py selftest      # validate this kit (runs in CI too)
 .github/workflows/   reusable CI + deploy workflows (ci-*.yml, deploy-*.yml, docker-ghcr.yml)
 bin/deployctl.py     new | ci | verify | status | secrets | selftest
 scripts/check_links.py   internal-link gate used by ci-static.yml
-sites.json           live surface manifest: name, repo, url, marker
+sites.json           live surface manifest: name, repo, workflows, url/marker or probes
 ```
 
 ## Adding this to an existing repo

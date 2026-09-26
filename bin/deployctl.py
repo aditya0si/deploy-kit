@@ -439,7 +439,11 @@ def print_platform_next_steps(name, target, stack):
     if target == "vercel":
         print("  vercel link --yes --scope adityasinghprojects --project %s   # then set VERCEL_ORG_ID/PROJECT_ID" % name)
     elif target == "netlify":
-        print("  netlify sites:create --name %s   # then: deployctl secrets %s --env-file <file>" % (name, name))
+        print("  netlify sites:create --name %s --account-slug <slug>" % name)
+        print("  netlify api updateSite --data '{\"site_id\":\"<id>\",\"body\":{\"sso_login\":false}}'")
+        print("    ^ REQUIRED: Netlify creates sites SSO-protected, so visitors get a 401 login")
+        print("      redirect until this is cleared. Verify with `deployctl verify <url> --contains <marker>`.")
+        print("  then: deployctl secrets %s --env-file <file>" % name)
     elif target == "cloudflare":
         print("  wrangler deploy   # then add CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID as repo secrets")
     elif target == "pages":

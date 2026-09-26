@@ -41,7 +41,7 @@ tracked `node_modules` / `.env` / venv paths.
 | Service | Actually free? | Notes that decide placement |
 |---|---|---|
 | **Vercel Hobby** | yes | personal projects; team `adityasinghprojects` already in use |
-| **Netlify Free** | yes, no card | 100 GB bandwidth, 300 build-min/month, functions included |
+| **Netlify Free** | yes, no card | 100 GB bandwidth, 300 build-min/month, functions included. **New sites are created SSO-protected** - visitors get a 401 login redirect until `netlify api updateSite --data '{"site_id":"<id>","body":{"sso_login":false}}'` is run |
 | **Cloudflare Workers Free** | yes | 100k req/day, **10 ms CPU per request**, KV/D1/R2 free tiers — edge APIs, not long jobs |
 | **GitHub Pages** | yes | static only; already used for the Cisco hardware labs |
 | **Render Free** | yes, with teeth | spins down after **15 min idle**, free Postgres **expires** — put durable data on Neon/Supabase, not Render PG |

@@ -1,0 +1,55 @@
+name: Deploy (Vercel)
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        type: string
+        default: "."
+      prod:
+        type: boolean
+        default: true
+      verify-marker:
+        type: string
+        default: ""
+        description: string that must appear in the live page body
+    secrets:
+      VERCEL_TOKEN:
+        required: true
+      VERCEL_ORG_ID:
+        required: true
+      VERCEL_PROJECT_ID:
+        required: true
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Deploy
+        id: deploy
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          FLAGS=""
+          if [ "${{ inputs.prod }}" = "true" ]; then FLAGS="--prod"; fi
+          npx --yes vercel@latest pull --yes $FLAGS --token="$VERCEL_TOKEN" >/dev/null
+          npx --yes vercel@latest build $FLAGS --token="$VERCEL_TOKEN" >/dev/null
+          URL=$(npx --yes vercel@latest deploy --prebuilt $FLAGS --token="$VERCEL_TOKEN" | tail -1)
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "::notice::deployed $URL"
+      - name: Verify body content
+        if: ${{ inputs.verify-marker != '' }}
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
+          MARKER: ${{ inputs.verify-marker }}
+        run: |
+          body=$(curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors "$URL")
+          if printf '%s' "$body" | grep -qF "$MARKER"; then echo "verified marker in $URL";
+          else echo "::error::marker '$MARKER' not found in $URL"; exit 1; fi

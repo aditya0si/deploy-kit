@@ -1,0 +1,44 @@
+name: CI (Python)
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        type: string
+        default: "3.11"
+      working-directory:
+        type: string
+        default: "."
+      test-command:
+        type: string
+        default: ""
+        description: leave empty to auto-detect pytest
+permissions:
+  contents: read
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          for f in requirements.txt requirements-dev.txt dev-requirements.txt; do
+            if [ -f "$f" ]; then pip install -r "$f"; fi
+          done
+          if [ -f pyproject.toml ]; then pip install -e ".[dev]" || pip install -e . || pip install .; fi
+      - name: Syntax gate
+        run: python -m compileall -q -x '(^|/)(\.venv|venv|node_modules|\.git)/' .
+      - name: Tests
+        run: |
+          CMD="${{ inputs.test-command }}"
+          if [ -n "$CMD" ]; then pip install pytest >/dev/null; sh -c "$CMD";
+          elif [ -d tests ] || [ -f pytest.ini ] || grep -qs pytest pyproject.toml; then
+            pip install pytest >/dev/null; python -m pytest -q;
+          else echo "::notice::no pytest suite detected - skipped"; fi

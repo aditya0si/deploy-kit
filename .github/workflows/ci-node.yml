@@ -1,0 +1,50 @@
+name: CI (Node)
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: "22"
+      package-manager:
+        type: string
+        default: npm
+        description: npm | pnpm | yarn (drives the setup-node cache)
+      working-directory:
+        type: string
+        default: "."
+      run-build:
+        type: boolean
+        default: true
+permissions:
+  contents: read
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
+      - name: Install
+        run: |
+          if [ -f pnpm-lock.yaml ]; then corepack enable && pnpm install --frozen-lockfile;
+          elif [ -f yarn.lock ]; then corepack enable && yarn install --frozen-lockfile;
+          elif [ -f package-lock.json ]; then npm ci;
+          else npm install; fi
+      - name: Lint (only if a script exists)
+        run: |
+          if node -e "process.exit(require('./package.json').scripts?.lint?0:1)"; then npm run lint;
+          else echo "::notice::no lint script - skipped"; fi
+      - name: Build
+        if: ${{ inputs.run-build }}
+        run: |
+          if node -e "process.exit(require('./package.json').scripts?.build?0:1)"; then npm run build;
+          else echo "::notice::no build script - skipped"; fi
+      - name: Test
+        run: |
+          if node -e "process.exit(require('./package.json').scripts?.test?0:1)"; then npm test;
+          else echo "::notice::no test script - skipped"; fi

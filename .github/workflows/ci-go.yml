@@ -1,0 +1,32 @@
+name: CI (Go)
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        type: string
+        default: "."
+      go-version-file:
+        type: string
+        default: go.mod
+permissions:
+  contents: read
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ inputs.go-version-file }}
+          cache-dependency-path: ${{ inputs.working-directory }}/go.sum
+      - name: gofmt
+        run: |
+          fmt_out=$(gofmt -l . | grep -v '^vendor/' || true)
+          if [ -n "$fmt_out" ]; then echo "::error::gofmt needed:"; echo "$fmt_out"; exit 1; fi
+      - run: go vet ./...
+      - run: go build ./...
+      - name: Test
+        run: go test ./... -count=1

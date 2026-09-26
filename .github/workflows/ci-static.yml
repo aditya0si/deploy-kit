@@ -1,0 +1,30 @@
+name: CI (static site)
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        type: string
+        default: "."
+      entry:
+        type: string
+        default: index.html
+permissions:
+  contents: read
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Entry point exists
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          test -f "${{ inputs.entry }}" || (echo "::error::missing ${{ inputs.entry }}"; exit 1)
+          echo "entry size: $(wc -c < "${{ inputs.entry }}") bytes"
+      - name: No tracked junk
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          bad=$(git ls-files | grep -Ei '(^|/)(node_modules|\.venv|venv)/|\.env$' || true)
+          if [ -n "$bad" ]; then echo "::error::tracked junk:"; echo "$bad"; exit 1; fi
+      - name: Internal links resolve
+        working-directory: ${{ inputs.working-directory }}
+        run: python3 scripts/check_links.py

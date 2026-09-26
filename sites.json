@@ -1,0 +1,71 @@
+{
+  "_schema": "live surface manifest - name, repo, url, marker (marker must appear in the page body)",
+  "sites": [
+    {
+      "name": "CosmosSteller",
+      "repo": "aditya0si/CosmosSteller",
+      "url": "https://cosmos-steller.vercel.app",
+      "marker": "Stellar App"
+    },
+    {
+      "name": "CoverAI",
+      "repo": "aditya0si/CoverAI",
+      "url": "https://cover-ai-web-adityasinghprojects.vercel.app",
+      "marker": "CoverAI \u2014 Intelligent Vehicle Insurance Copilot"
+    },
+    {
+      "name": "asic-crc-engine",
+      "repo": "aditya0si/asic-crc-engine",
+      "url": "https://aditya0si.github.io/asic-crc-engine/",
+      "marker": "asic-crc-engine \u2014 Viewer"
+    },
+    {
+      "name": "ate-fixture-lab",
+      "repo": "aditya0si/ate-fixture-lab",
+      "url": "https://aditya0si.github.io/ate-fixture-lab/",
+      "marker": "ate-fixture-lab \u2014 Viewer"
+    },
+    {
+      "name": "bom-intelligence",
+      "repo": "aditya0si/bom-intelligence",
+      "url": "https://aditya0si.github.io/bom-intelligence/",
+      "marker": "bom-intelligence \u2014 Viewer"
+    },
+    {
+      "name": "hardware-npi-lab",
+      "repo": "aditya0si/hardware-npi-lab",
+      "url": "https://aditya0si.github.io/hardware-npi-lab/",
+      "marker": "hardware-npi-lab"
+    },
+    {
+      "name": "pcb-dfm-dft",
+      "repo": "aditya0si/pcb-dfm-dft",
+      "url": "https://aditya0si.github.io/pcb-dfm-dft/",
+      "marker": "pcb-dfm-dft \u2014 Viewer"
+    },
+    {
+      "name": "pdn-thermal-lab",
+      "repo": "aditya0si/pdn-thermal-lab",
+      "url": "https://aditya0si.github.io/pdn-thermal-lab/",
+      "marker": "pdn-thermal-lab \u2014 Viewer"
+    },
+    {
+      "name": "portfolio",
+      "repo": "aditya0si/portfolio",
+      "url": "https://portfolio-gray-five-72.vercel.app",
+      "marker": "Aditya Singh \u2014 Systems Engineering &amp; Agent Architectures"
+    },
+    {
+      "name": "schemeGPT",
+      "repo": "aditya0si/schemeGPT",
+      "url": "https://schemegpt-web-adityasinghprojects.vercel.app",
+      "marker": "SchemeGPT \u2014 Indian schemes, answered honestly"
+    },
+    {
+      "name": "si-pi-lab",
+      "repo": "aditya0si/si-pi-lab",
+      "url": "https://aditya0si.github.io/si-pi-lab/",
+      "marker": "si-pi-lab \u2014 Viewer"
+    }
+  ]
+}

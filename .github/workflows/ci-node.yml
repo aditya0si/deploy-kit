@@ -5,10 +5,6 @@ on:
       node-version:
         type: string
         default: "22"
-      package-manager:
-        type: string
-        default: npm
-        description: npm | pnpm | yarn (drives the setup-node cache)
       working-directory:
         type: string
         default: "."
@@ -28,7 +24,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
-          cache: ${{ inputs.package-manager }}
+      - name: Cache dependency store
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            ~/.cache/pnpm
+            ~/.cache/yarn
+          key: ${{ runner.os }}-deps-${{ hashFiles('**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock') }}
+          restore-keys: ${{ runner.os }}-deps-
       - name: Install
         run: |
           if [ -f pnpm-lock.yaml ]; then corepack enable && pnpm install --frozen-lockfile;

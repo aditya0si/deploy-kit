@@ -199,9 +199,8 @@ def ci_caller(stack, pm="npm", entry="index.html", workdir="."):
     ref = "%s/.github/workflows/%s@%s" % (KIT_SLUG, ci_file, KIT_BRANCH)
     inputs = []
     if stack == "node":
-        inputs = [("package-manager", pm)]
         if workdir != ".":
-            inputs.append(("working-directory", workdir))
+            inputs = [("working-directory", workdir)]
     elif stack == "static":
         if entry != "index.html":
             inputs.append(("entry", entry))
@@ -393,8 +392,11 @@ def cmd_new(args):
     print("stack   : %s" % stack)
     print("target  : %s" % target)
     verb = "would write" if DRY else "written"
-    for path_, changed in scaffold(path, args.name, args.desc, stack, target, args.marker):
+    scaffolded = scaffold(path, args.name, args.desc, stack, target, args.marker)
+    for path_, changed in scaffolded:
         print("  %-52s %s" % (os.path.relpath(path_, path), verb if changed else "unchanged"))
+    expected = [os.path.basename(p) for p, _ in scaffolded
+                if os.path.basename(os.path.dirname(p)) == "workflows"]
 
     if args.dry_run:
         print("\nDRY RUN - nothing created, nothing pushed.")
@@ -422,7 +424,10 @@ def cmd_new(args):
     sha = head_sha(path)
     upsert_site(args.name, repo="%s/%s" % (OWNER, args.name))
     if not args.no_wait:
-        watch_ci(args.name, sha)
+        if not watch_ci(args.name, sha, expected):
+            print("RESULT: pushed, but CI is NOT green - fix before calling this done")
+            return 1
+        print("RESULT: pushed and CI green")
     print_platform_next_steps(args.name, target, stack)
     return 0
 
@@ -445,24 +450,45 @@ def print_platform_next_steps(name, target, stack):
         print("  set them with: deployctl secrets %s --env-file <path-to-secrets-file>" % name)
 
 
-def watch_ci(repo, sha, timeout_s=900):
-    print("ci: waiting for the run on %s..." % sha[:8])
+def watch_ci(repo, sha, wf_files, timeout_s=900):
+    """Wait for the CI/deploy workflows for THIS sha. Success only if every expected
+    workflow has a completed, successful run - Dependabot and other workflows are ignored,
+    and a workflow with no observed run counts as failure, never as success."""
+    wf_files = [w for w in wf_files] or []
+    if not wf_files:
+        print("ci: no workflows expected for this project")
+        return True
+    print("ci: waiting for %s on %s..." % (",".join(wf_files), sha[:8]))
     deadline = time.time() + timeout_s
-    seen = None
-    while time.time() < deadline:
-        runs = gh_json(["run", "list", "--repo", "%s/%s" % (OWNER, repo), "--limit", "20",
-                        "--json", "databaseId,headSha,status,conclusion,name,url"]) or []
-        mine = [r for r in runs if r.get("headSha") == sha]
-        if mine:
-            seen = mine[0]
-            if seen.get("status") == "completed":
-                print("ci: %s -> %s  %s" % (seen.get("name"), seen.get("conclusion"), seen.get("url")))
-                return seen.get("conclusion") == "success"
-        else:
-            print("ci: no run yet for this sha (queued?)")
+    final = {}
+    while True:
+        final = {}
+        for wf in wf_files:
+            runs = gh_json(["run", "list", "--repo", "%s/%s" % (OWNER, repo), "--workflow", wf,
+                            "--limit", "15",
+                            "--json", "databaseId,headSha,status,conclusion,event,url"], check=False) or []
+            mine = [r for r in runs if r.get("headSha") == sha]
+            push_runs = [r for r in mine if r.get("event") == "push"]
+            pick = (push_runs or mine or [None])[0]
+            if pick:
+                final[wf] = pick
+        pending = [w for w in wf_files if w not in final or final[w].get("status") != "completed"]
+        if not pending or time.time() > deadline:
+            break
         time.sleep(12)
-    print("ci: timed out after %ds (last seen: %s)" % (timeout_s, json.dumps(seen) if seen else "nothing"))
-    return False
+
+    ok = True
+    for wf in wf_files:
+        run = final.get(wf)
+        if not run:
+            print("ci: %-11s NO RUN OBSERVED for %s -> treated as failure" % (wf, sha[:8]))
+            ok = False
+            continue
+        verdict = "success" if run.get("conclusion") == "success" else str(run.get("conclusion") or run.get("status"))
+        print("ci: %-11s %-9s %s" % (wf, verdict, run.get("url")))
+        if verdict != "success":
+            ok = False
+    return ok
 
 
 def cmd_ci(args):

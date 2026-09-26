@@ -32,6 +32,10 @@
       "marker": "bom-intelligence \u2014 Viewer"
     },
     {
+      "name": "deploy-kit-example",
+      "repo": "aditya0si/deploy-kit-example"
+    },
+    {
       "name": "hardware-npi-lab",
       "repo": "aditya0si/hardware-npi-lab",
       "url": "https://aditya0si.github.io/hardware-npi-lab/",

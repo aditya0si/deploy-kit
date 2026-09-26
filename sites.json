@@ -14,6 +14,12 @@
       "marker": "CoverAI \u2014 Intelligent Vehicle Insurance Copilot"
     },
     {
+      "name": "aditya0si-live",
+      "url": "https://aditya0si-live.netlify.app",
+      "repo": "aditya0si/deploy-kit",
+      "marker": "Live surfaces"
+    },
+    {
       "name": "asic-crc-engine",
       "repo": "aditya0si/asic-crc-engine",
       "url": "https://aditya0si.github.io/asic-crc-engine/",
@@ -34,6 +40,12 @@
     {
       "name": "deploy-kit-example",
       "repo": "aditya0si/deploy-kit-example"
+    },
+    {
+      "name": "deploy-kit-proof",
+      "url": "https://deploy-kit-proof.aditya0si.workers.dev",
+      "repo": "aditya0si/deploy-kit",
+      "marker": "\"ok\":true"
     },
     {
       "name": "hardware-npi-lab",

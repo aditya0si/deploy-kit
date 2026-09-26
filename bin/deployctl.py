@@ -15,6 +15,7 @@ Stdlib only. Drives `git` and `gh`; never prints secret values.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import re
@@ -581,6 +582,92 @@ def cmd_secrets(args):
     return 0
 
 
+def cmd_site(args):
+    """Generate a self-contained static status page from the manifest.
+
+    The page is a labelled SNAPSHOT: CI conclusions and liveness are read at generation
+    time. Regenerate (or run it from a cron) rather than implying live monitoring.
+    """
+    import html
+    sites = load_sites().get("sites", [])
+    rows = []
+    for site in sites:
+        name = site.get("name", "")
+        repo = site.get("repo") or ""
+        url = site.get("url") or ""
+        ok, detail = (None, "no url")
+        if url:
+            ok, detail = probe(url, site.get("marker"), timeout=8.0, retries=1)
+        ci = ""
+        if repo:
+            runs = gh_json(["run", "list", "--repo", repo, "--limit", "1", "--branch",
+                            default_branch_of(repo), "--json", "conclusion,status"], check=False) or []
+            if runs:
+                ci = runs[0].get("conclusion") or runs[0].get("status") or ""
+        rows.append({"name": name, "repo": repo, "url": url, "ci": ci, "ok": ok, "detail": detail})
+        print("  %-22s ci=%-8s live=%s" % (name, ci or "-", detail))
+
+    live = sum(1 for r in rows if r["ok"])
+    green = sum(1 for r in rows if r["ci"] == "success")
+    stamp = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+
+    def cell(r):
+        name = html.escape(r["name"])
+        label = name
+        if r["repo"]:
+            label = '<a href="https://github.com/%s">%s</a>' % (html.escape(r["repo"]), name)
+        if r["url"]:
+            live_txt = ('<a class="ok" href="%s">live</a>' % html.escape(r["url"])) if r["ok"] else                        '<span class="bad">%s</span>' % html.escape(r["detail"][:40])
+        else:
+            live_txt = '<span class="muted">no url</span>'
+        ci_txt = ('<span class="ok">green</span>' if r["ci"] == "success"
+                  else ('<span class="bad">%s</span>' % html.escape(r["ci"]) if r["ci"]
+                        else '<span class="muted">-</span>'))
+        return "<tr><td>%s</td><td>%s</td><td>%s</td></tr>" % (label, ci_txt, live_txt)
+
+    body = "\n".join(cell(r) for r in rows)
+    page = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Live surfaces - Aditya Singh</title>
+<style>
+:root{color-scheme:dark}
+body{margin:0;background:#0b0d10;color:#e6e6e6;font:15px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:820px;margin:0 auto;padding:48px 20px}
+h1{font-size:1.5rem;margin:0 0 4px}
+p.sub{color:#8b949e;margin:0 0 28px}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #1f242b}
+th{color:#8b949e;font-weight:600;font-size:.8rem;letter-spacing:.04em;text-transform:uppercase}
+a{color:#58a6ff;text-decoration:none} a:hover{text-decoration:underline}
+.ok{color:#3fb950}.bad{color:#f85149}.muted{color:#6e7681}
+footer{margin-top:28px;color:#6e7681;font-size:.85rem}
+</style></head><body><main>
+<h1>Live surfaces</h1>
+<p class="sub">__LIVE__ of __TOTAL__ declared surfaces serving, __GREEN__ with a green default-branch CI run.
+Snapshot generated __STAMP__ by <a href="https://github.com/__KIT__">deploy-kit</a>.</p>
+<table><thead><tr><th>project</th><th>ci</th><th>live</th></tr></thead>
+<tbody>
+__ROWS__
+</tbody></table>
+<footer>Generated from a manifest, not hand-maintained. A green CI run is a test verdict;
+"live" means the page returned 200 and contained the declared marker.</footer>
+</main></body></html>
+"""
+    for token, value in (("__LIVE__", live), ("__TOTAL__", len(rows)), ("__GREEN__", green),
+                         ("__STAMP__", stamp), ("__KIT__", KIT_SLUG), ("__ROWS__", body)):
+        page = page.replace(token, str(value))
+    assert "__" not in page.replace("__pycache__", ""), "unsubstituted placeholder in the page"
+
+    out_dir = os.path.abspath(args.out or os.path.join(KIT_ROOT, "site"))
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, "index.html")
+    with io.open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(page)
+    print("site: wrote %s (%d bytes)" % (path, len(page.encode("utf-8"))))
+    return 0
+
+
 def cmd_selftest(args):
     try:
         import yaml
@@ -695,6 +782,10 @@ def main(argv=None):
     p.add_argument("--env-file", default=None)
     p.add_argument("--all-from-file", action="store_true")
     p.set_defaults(func=cmd_secrets)
+
+    p = sub.add_parser("site", help="generate a static status page from the manifest")
+    p.add_argument("--out", default=None)
+    p.set_defaults(func=cmd_site)
 
     p = sub.add_parser("selftest", help="validate this kit")
     p.set_defaults(func=cmd_selftest)

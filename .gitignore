@@ -4,3 +4,8 @@ __pycache__/
 .env
 *.log
 out.json
+
+# Local Netlify folder
+.netlify
+.netlify/
+site/
